@@ -92,7 +92,19 @@ contract UnstoppableChallenge is Test {
      * CODE YOUR SOLUTION HERE
      */
     function test_unstoppable() public checkSolvedByPlayer {
-        
+        /*
+            Attack idea: the Vault contract has a check in the flashLoan function that checks if the totalAssets() is equal to the convertToShares(totalSupply) before executing the flashLoan. 
+            the convertToShares function is supposed to convert assets amount to shares amount when user deposits assets to the Vault.
+            In this case it will take totalSupply as input (which is the total shares in the Vault)
+            do totalSupply * totalSupply / totalAssets() and return the result.
+            Since the totalAssets is equal to the totalShares, the convertToShares function will return the totalShares.
+            => it is enforced that the totalAssets is equal to the totalShares.
+
+            This can be easily bypassed by transferring tokens to the Vault contract without calling the deposit function.
+            This way the totalAssets will be greater than the totalShares and the flashLoan will not be executed.
+        */
+
+        token.transfer(vault, INITIAL_PLAYER_TOKEN_BALANCE);
     }
 
     /**
