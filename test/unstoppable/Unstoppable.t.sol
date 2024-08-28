@@ -103,8 +103,8 @@ contract UnstoppableChallenge is Test {
             This can be easily bypassed by transferring tokens to the Vault contract without calling the deposit function.
             This way the totalAssets will be greater than the totalShares and the flashLoan will not be executed.
         */
-
-        token.transfer(vault, INITIAL_PLAYER_TOKEN_BALANCE);
+        require(token.transfer(address(vault), 1));
+        
     }
 
     /**
