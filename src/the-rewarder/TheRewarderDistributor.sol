@@ -11,7 +11,9 @@ import {BitMaps} from "@openzeppelin/contracts/utils/structs/BitMaps.sol";
 struct Distribution {
     uint256 remaining;
     uint256 nextBatchNumber;
+    // each batch has a root
     mapping(uint256 batchNumber => bytes32 root) roots;
+    // each address has a bitmap of claimed batches
     mapping(address claimer => mapping(uint256 word => uint256 bits)) claims;
 }
 
@@ -63,6 +65,7 @@ contract TheRewarderDistributor {
         distributions[token].roots[batchNumber] = newRoot;
         distributions[token].nextBatchNumber++;
 
+        // transfer tokens to this contract
         SafeTransferLib.safeTransferFrom(address(token), msg.sender, address(this), amount);
 
         emit NewDistribution(token, batchNumber, newRoot, amount);
@@ -86,12 +89,17 @@ contract TheRewarderDistributor {
 
         for (uint256 i = 0; i < inputClaims.length; i++) {
             inputClaim = inputClaims[i];
-
+            
+            // calculate word and bit position from the batch number
             uint256 wordPosition = inputClaim.batchNumber / 256;
             uint256 bitPosition = inputClaim.batchNumber % 256;
 
+            // if the token is different from the previous claim or is the first claim of the list check if the batch has already been claimed
+            // using the previous token and amount
             if (token != inputTokens[inputClaim.tokenIndex]) {
                 if (address(token) != address(0)) {
+                    // if the token is different from the previous claim, set the previous claim and amount
+                    // this will deduct the amount from the remaining balance and set the bitmap for the user
                     if (!_setClaimed(token, amount, wordPosition, bitsSet)) revert AlreadyClaimed();
                 }
 
@@ -99,6 +107,8 @@ contract TheRewarderDistributor {
                 bitsSet = 1 << bitPosition; // set bit at given position
                 amount = inputClaim.amount;
             } else {
+                // the token is the same as the previous claim, accumulate the amount and set the one more bit in the 256 bits word
+                // this is when a user has multiple claims in the same batch with the same token
                 bitsSet = bitsSet | 1 << bitPosition;
                 amount += inputClaim.amount;
             }
@@ -118,7 +128,12 @@ contract TheRewarderDistributor {
     }
 
     function _setClaimed(IERC20 token, uint256 amount, uint256 wordPosition, uint256 newBits) private returns (bool) {
+        // check if the batch has already been claimed from a user
+        // wordPosition is the batch number divided by 256
+        // this get the bitmap for that user and batch
         uint256 currentWord = distributions[token].claims[msg.sender][wordPosition];
+        // check if the batch has already been claimed from a user using bitwise AND
+        // if the result is not 0, the batch has already been claimed
         if ((currentWord & newBits) != 0) return false;
 
         // update state
